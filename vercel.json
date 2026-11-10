@@ -1,0 +1,1 @@
+{"$schema":"https://openapi.vercel.sh/vercel.json","buildCommand":"bunx prisma generate && DATABASE_URL=${DATABASE_URL_UNPOOLED:-$DATABASE_URL} bunx prisma db push --accept-data-loss && bun prisma/seed.ts && next build","framework":"nextjs"}

@@ -1,0 +1,807 @@
+// MY CS MTP — Prisma schema
+// Note: This project runs on SQLite in the dev environment; production deployments
+// can switch the datasource provider to postgresql with no model changes.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =========================================================
+// AUTH & USERS
+// =========================================================
+
+enum Role {
+  STUDENT
+  ADMIN
+  EXAMINER
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String?
+  mobile        String?
+  passwordHash  String
+  role          Role     @default(STUDENT)
+  courseId      String?  // selected course for STUDENTs / scope for EXAMINERs
+  course        Course?  @relation("UserCourse", fields: [courseId], references: [id])
+  isBlocked     Boolean  @default(false)
+  emailVerified DateTime?
+
+  // Referral
+  referralCode  String?  @unique
+  referredById  String?
+  // 2FA / trust device
+  twoFactorPending   Boolean  @default(false)
+  twoFactorCodeHash  String?
+  twoFactorExpiresAt DateTime?
+  trustedDeviceToken String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  verificationTokens VerificationToken[]
+  cartItems          CartItem[]
+  orders             Order[]
+  purchases          Purchase[]
+  assignments        Assignment[]      @relation("StudentAssignments")
+  examinerAssignments Assignment[]     @relation("ExaminerAssignments")
+  wallet             Wallet?
+  walletTransactions WalletTransaction[]
+  mentorships        Mentorship[]
+  notifications      NotificationRecipient[]
+  examinerPapers     ExaminerPaper[]
+  examinerSubjects   ExaminerSubject[]
+  newsletterSubscriber NewsletterSubscriber?
+
+  @@index([role])
+  @@index([courseId])
+}
+
+enum VerificationPurpose {
+  EMAIL_VERIFY
+  LOGIN_2FA
+  PASSWORD_RESET
+}
+
+model VerificationToken {
+  id        String              @id @default(cuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose   VerificationPurpose
+  tokenHash String
+  codeHash  String?  // OTP code hash (numeric). NULL if link-only.
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+// =========================================================
+// CATALOGUE — Courses / Plans / Subjects / Papers
+// =========================================================
+
+model Course {
+  id          String  @id @default(cuid())
+  name        String
+  slug        String  @unique
+  description String
+  imageKey    String?
+  imageAlt    String?
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+  // SEO
+  seoTitle       String?
+  seoDescription String?
+  seoKeywords    String?
+  ogImageKey     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  plans     Plan[]
+  subjects  Subject[]
+  papers    TestPaper[]
+  notes     Note[]
+  miscFiles MiscFile[]
+  schedules Schedule[]
+  freeResources FreeResource[]
+  users     User[]      @relation("UserCourse")
+  examTiming ExamTiming?
+}
+
+model Plan {
+  id          String  @id @default(cuid())
+  courseId    String
+  course      Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  name        String
+  slug        String  @unique
+  description String?
+  tags        String?  // comma-separated tags (SQLite has no native list)
+  scheduleFileKey String?
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+  // SEO
+  seoTitle       String?
+  seoDescription String?
+  seoKeywords    String?
+  ogImageKey     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  planSubjects PlanSubject[]
+  papers       TestPaper[]
+  schedules    Schedule[]
+  notes        Note[]
+  miscFiles    MiscFile[]
+  cartItems    CartItem[]
+  purchases    Purchase[]
+  scheduleNames ScheduleName[]
+
+  @@index([courseId])
+}
+
+model Subject {
+  id          String  @id @default(cuid())
+  courseId    String
+  course      Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  name        String
+  slug        String  @unique
+  description String?
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  planSubjects PlanSubject[]
+  papers       TestPaper[]
+  notes        Note[]
+  miscFiles    MiscFile[]
+  examinerSubjects ExaminerSubject[]
+
+  @@index([courseId])
+}
+
+model PlanSubject {
+  id            String  @id @default(cuid())
+  planId        String
+  plan          Plan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  subjectId     String
+  subject       Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  originalPrice  Float
+  offerPrice     Float
+  isActive      Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  papers     TestPaper[]
+  cartItems  CartItem[]
+  purchases  Purchase[]
+
+  @@unique([planId, subjectId])
+  @@index([planId])
+  @@index([subjectId])
+}
+
+model TestPaper {
+  id            String  @id @default(cuid())
+  planSubjectId String
+  planSubject   PlanSubject @relation(fields: [planSubjectId], references: [id], onDelete: Cascade)
+  courseId      String
+  course        Course  @relation(fields: [courseId], references: [id])
+  planId        String
+  plan          Plan    @relation(fields: [planId], references: [id])
+  subjectId     String
+  subject       Subject @relation(fields: [subjectId], references: [id])
+  title         String
+  slug          String  @unique
+  description   String?
+  questionFileKey String?
+  answerFileKey   String?
+  allowAnswerDownload Boolean @default(false)
+  scheduledDate DateTime?
+  totalMarks    Float  @default(100)
+  isActive      Boolean @default(true)
+  sortOrder     Int    @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignments Assignment[]
+  examinerPapers ExaminerPaper[]
+
+  @@index([planSubjectId])
+  @@index([courseId])
+  @@index([planId])
+  @@index([subjectId])
+}
+
+// =========================================================
+// Schedules
+// =========================================================
+
+model ScheduleName {
+  id     String  @id @default(cuid())
+  planId String
+  plan   Plan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  name   String
+  sortOrder Int  @default(0)
+
+  schedules Schedule[]
+
+  @@index([planId])
+}
+
+model Schedule {
+  id             String  @id @default(cuid())
+  planId         String
+  plan           Plan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  scheduleNameId String?
+  scheduleName   ScheduleName? @relation(fields: [scheduleNameId], references: [id])
+  courseId       String
+  course         Course  @relation(fields: [courseId], references: [id])
+  title          String
+  description    String?
+  fileKey        String?
+  isPublic       Boolean @default(false)
+  publishedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([planId])
+  @@index([courseId])
+}
+
+// =========================================================
+// Notes & Misc / Amendment files
+// =========================================================
+
+model Note {
+  id          String  @id @default(cuid())
+  courseId     String
+  course      Course  @relation(fields: [courseId], references: [id])
+  planId      String?
+  plan        Plan?   @relation(fields: [planId], references: [id])
+  subjectId   String?
+  subject     Subject? @relation(fields: [subjectId], references: [id])
+  title       String
+  description String?
+  fileKey     String?
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([courseId])
+  @@index([planId])
+  @@index([subjectId])
+}
+
+model MiscFile {
+  id          String  @id @default(cuid())
+  courseId     String
+  course      Course  @relation(fields: [courseId], references: [id])
+  planId      String?
+  plan        Plan?   @relation(fields: [planId], references: [id])
+  subjectId   String?
+  subject     Subject? @relation(fields: [subjectId], references: [id])
+  title       String
+  description String?
+  fileKey     String?
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([courseId])
+  @@index([planId])
+  @@index([subjectId])
+}
+
+model FreeResource {
+  id          String  @id @default(cuid())
+  courseId    String?
+  course      Course? @relation(fields: [courseId], references: [id])
+  title       String
+  description String?
+  fileKey     String?
+  imageKey    String?
+  imageAlt    String?
+  isPublic    Boolean @default(true)
+  sortOrder    Int    @default(0)
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([courseId])
+}
+
+// =========================================================
+// Assignments / Submissions
+// =========================================================
+
+enum AssignmentStatus {
+  SUBMITTED
+  ASSIGNED
+  UNDER_EVALUATION
+  EVALUATED
+}
+
+model Assignment {
+  id              String   @id @default(cuid())
+  studentId       String
+  student         User     @relation("StudentAssignments", fields: [studentId], references: [id])
+  paperId         String
+  paper           TestPaper @relation(fields: [paperId], references: [id])
+  uploadedFileKey String?
+  fileName        String?
+  fileSize        Int?
+  status          AssignmentStatus @default(SUBMITTED)
+  examinerId      String?
+  examiner        User?    @relation("ExaminerAssignments", fields: [examinerId], references: [id])
+  marks           Float?
+  maxMarks        Float?
+  remarks         String?
+  evaluatedFileKey String?
+  evaluatedFileName String?
+  submittedAt     DateTime @default(now())
+  evaluatedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([studentId])
+  @@index([paperId])
+  @@index([examinerId])
+  @@index([status])
+}
+
+model ExaminerPaper {
+  id        String @id @default(cuid())
+  examinerId String
+  examiner  User   @relation(fields: [examinerId], references: [id], onDelete: Cascade)
+  paperId   String
+  paper     TestPaper @relation(fields: [paperId], references: [id], onDelete: Cascade)
+
+  @@unique([examinerId, paperId])
+  @@index([examinerId])
+}
+
+model ExaminerSubject {
+  id        String @id @default(cuid())
+  examinerId String
+  examiner  User    @relation(fields: [examinerId], references: [id], onDelete: Cascade)
+  subjectId String
+  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([examinerId, subjectId])
+  @@index([examinerId])
+}
+
+// =========================================================
+// CART, ORDERS, PURCHASES
+// =========================================================
+
+model CartItem {
+  id         String  @id @default(cuid())
+  userId     String?
+  user       User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionKey String?
+  planId     String
+  plan       Plan    @relation(fields: [planId], references: [id])
+  planSubjectId String
+  planSubject PlanSubject @relation(fields: [planSubjectId], references: [id])
+  subjectId  String
+  priceSnapshot Float
+  originalPriceSnapshot Float
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([sessionKey])
+}
+
+enum OrderStatus {
+  CREATED
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum PaymentGateway {
+  RAZORPAY
+  CASHFREE
+  MOCK
+}
+
+model Order {
+  id              String  @id @default(cuid())
+  userId          String
+  user            User    @relation(fields: [userId], references: [id])
+  subtotal        Float
+  discount        Float   @default(0)
+  walletUsed      Float   @default(0)
+  total           Float
+  promoCodeId     String?
+  promoCode       PromoCode? @relation(fields: [promoCodeId], references: [id])
+  gateway         PaymentGateway
+  gatewayOrderId  String?
+  gatewayPaymentId String?
+  gatewaySignature String?
+  status          OrderStatus @default(CREATED)
+  billingName     String?
+  billingEmail    String?
+  billingMobile   String?
+  billingAddress  String?
+  billingCity     String?
+  billingState    String?
+  billingPincode  String?
+  failureReason   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  purchases Purchase[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([gateway])
+}
+
+model Purchase {
+  id         String  @id @default(cuid())
+  orderId    String
+  order      Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User    @relation(fields: [userId], references: [id])
+  planId     String
+  plan       Plan    @relation(fields: [planId], references: [id])
+  planSubjectId String
+  planSubject PlanSubject @relation(fields: [planSubjectId], references: [id])
+  subjectId  String
+  price      Float
+  isRevoked  Boolean @default(false)
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([planId])
+  @@index([planSubjectId])
+}
+
+// =========================================================
+// PROMO CODES
+// =========================================================
+
+enum PromoType {
+  PERCENT
+  FLAT
+}
+
+model PromoCode {
+  id          String  @id @default(cuid())
+  code        String  @unique
+  type        PromoType
+  value       Float
+  minAmount   Float   @default(0)
+  maxDiscount Float   @default(0)
+  usageLimit  Int     @default(0)  // 0 = unlimited
+  usedCount   Int     @default(0)
+  startsAt    DateTime?
+  endsAt      DateTime?
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orders Order[]
+}
+
+// =========================================================
+// WALLET
+// =========================================================
+
+enum WalletTxType {
+  CREDIT
+  DEBIT
+}
+
+model Wallet {
+  id        String  @id @default(cuid())
+  userId    String  @unique
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance   Float   @default(0)
+  transactions WalletTransaction[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WalletTransaction {
+  id        String  @id @default(cuid())
+  walletId  String
+  wallet    Wallet  @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id])
+  amount    Float
+  type      WalletTxType
+  reason    String
+  reference String?
+  createdAt DateTime @default(now())
+
+  @@index([walletId])
+  @@index([userId])
+}
+
+// =========================================================
+// REFERRAL
+// =========================================================
+
+model ReferralConfig {
+  id            String  @id @default(cuid())
+  rewardType    String  @default("WALLET") // WALLET | PERCENT
+  rewardValue   Float   @default(50)
+  rules         String?
+  isActive      Boolean @default(true)
+  updatedAt     DateTime @updatedAt
+}
+
+// =========================================================
+// MENTORSHIP
+// =========================================================
+
+enum MentorshipStatus {
+  REQUESTED
+  ASSIGNED
+  COMPLETED
+  CANCELLED
+}
+
+model Mentorship {
+  id           String  @id @default(cuid())
+  studentId    String
+  student      User    @relation(fields: [studentId], references: [id])
+  mentorName    String?
+  topic        String
+  notes        String?
+  status       MentorshipStatus @default(REQUESTED)
+  requestedAt  DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([studentId])
+  @@index([status])
+}
+
+// =========================================================
+// BLOG
+// =========================================================
+
+enum BlogStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model BlogPost {
+  id            String  @id @default(cuid())
+  title         String
+  slug          String  @unique
+  excerpt       String?
+  content       String  // markdown
+  coverImageKey String?
+  coverImageAlt String?
+  status        BlogStatus @default(DRAFT)
+  authorName    String?
+  tags          String?  // comma-separated
+  publishedAt   DateTime?
+  // SEO
+  seoTitle       String?
+  seoDescription String?
+  seoKeywords    String?
+  ogImageKey     String?
+  // AI generation
+  aiGenerated    Boolean @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([status])
+  @@index([publishedAt])
+}
+
+// =========================================================
+// CUSTOM PAGES
+// =========================================================
+
+model CustomPage {
+  id            String  @id @default(cuid())
+  title         String
+  slug          String  @unique
+  content       String  // markdown
+  showInHeader  Boolean @default(false)
+  showInFooter  Boolean @default(true)
+  isActive      Boolean @default(true)
+  // SEO
+  seoTitle       String?
+  seoDescription String?
+  seoKeywords    String?
+  ogImageKey     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([slug])
+}
+
+// =========================================================
+// NOTIFICATIONS
+// =========================================================
+
+enum NotificationAudience {
+  ALL
+  COURSE
+  SINGLE
+}
+
+model Notification {
+  id         String  @id @default(cuid())
+  title      String
+  message    String
+  audience   NotificationAudience @default(ALL)
+  courseId   String?
+  targetUserId String?
+  createdBy  String?
+  createdAt  DateTime @default(now())
+
+  recipients NotificationRecipient[]
+
+  @@index([audience])
+}
+
+model NotificationRecipient {
+  id              String  @id @default(cuid())
+  notificationId  String
+  notification    Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isRead          Boolean @default(false)
+  readAt          DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+}
+
+// =========================================================
+// NEWSLETTER, LEADS, POPUP
+// =========================================================
+
+model NewsletterSubscriber {
+  id        String  @id @default(cuid())
+  email     String  @unique
+  isActive  Boolean @default(true)
+  userId    String?  @unique
+  user      User?   @relation(fields: [userId], references: [id])
+  source    String?
+  createdAt DateTime @default(now())
+}
+
+model NewsletterLog {
+  id        String  @id @default(cuid())
+  subject   String
+  body      String
+  recipientCount Int
+  sentAt    DateTime @default(now())
+}
+
+model Lead {
+  id         String  @id @default(cuid())
+  name       String?
+  email      String?
+  mobile     String?
+  courseInterest String?
+  source     String?
+  message    String?
+  createdAt  DateTime @default(now())
+
+  @@index([email])
+  @@index([mobile])
+}
+
+model PopupConfig {
+  id            String  @id @default(cuid())
+  enabled       Boolean @default(false)
+  title         String?
+  text          String?
+  imageKey      String?
+  imageAlt      String?
+  delaySeconds  Int     @default(5)
+  frequency      String  @default("ONCE_PER_SESSION") // ONCE_PER_SESSION | ALWAYS | ONCE_PER_DAY
+  updatedAt      DateTime @updatedAt
+}
+
+// =========================================================
+// SITE SETTINGS, EXAM TIMING, PAYMENT GATEWAY, EMAIL TEMPLATES, AI
+// =========================================================
+
+model SiteConfig {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String?
+
+  updatedAt DateTime @updatedAt
+}
+
+model ExamTiming {
+  id        String  @id @default(cuid())
+  courseKey String  // CSEET / CS_EXECUTIVE / CS_PROFESSIONAL / CUSTOM
+  courseId  String? @unique
+  course    Course?  @relation(fields: [courseId], references: [id])
+  examName  String
+  examDate  DateTime
+  isVisible Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PaymentGatewayConfig {
+  id            String  @id @default(cuid())
+  activeGateway String  @default("MOCK") // RAZORPAY | CASHFREE | MOCK
+  mode          String  @default("SANDBOX") // SANDBOX | PRODUCTION
+  razorpayEnabled Boolean @default(false)
+  cashfreeEnabled Boolean @default(false)
+  // Secrets stay in env vars — only status flags here
+  updatedAt      DateTime @updatedAt
+}
+
+model EmailTemplate {
+  id        String  @id @default(cuid())
+  key       String  @unique
+  subject   String
+  body      String
+  updatedAt DateTime @updatedAt
+}
+
+model AiConfig {
+  id        String  @id @default(cuid())
+  provider  String? // openai-compatible
+  baseUrl   String?
+  model     String?
+  apiKey    String? // stored encrypted-ish / env ref; never printed
+  isActive  Boolean @default(false)
+  updatedAt DateTime @updatedAt
+}
+
+// =========================================================
+// REDIRECTS — for slug-change 301s
+// =========================================================
+
+model Redirect {
+  id        String  @id @default(cuid())
+  fromPath  String  @unique
+  toPath    String
+  isPermanent Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// =========================================================
+// JOBS — for tracked admin actions (revoke, etc.)
+// =========================================================
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model Job {
+  id        String  @id @default(cuid())
+  type      String
+  payload   String
+  status    JobStatus @default(QUEUED)
+  result    String?
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
